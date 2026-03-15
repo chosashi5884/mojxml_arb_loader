@@ -26,7 +26,37 @@ xml_parser.py
 
 import zipfile
 import io
+import os
+import sys
+import importlib.util
 from xml.etree import ElementTree as ET
+
+# 同梱の defusedxml (vendor/) を importlib で直接読み込む
+# sys.path を操作せず、ファイルパスを直接指定することで
+# QGISのインポート機構との干渉を避ける
+def _load_vendored_defusedxml():
+    _base = os.path.dirname(os.path.abspath(__file__))
+    _init  = os.path.join(_base, 'vendor', 'defusedxml', '__init__.py')
+    _etree = os.path.join(_base, 'vendor', 'defusedxml', 'ElementTree.py')
+
+    # defusedxml パッケージ本体を登録
+    spec_pkg = importlib.util.spec_from_file_location(
+        'defusedxml', _init,
+        submodule_search_locations=[os.path.dirname(_init)]
+    )
+    pkg = importlib.util.module_from_spec(spec_pkg)
+    sys.modules['defusedxml'] = pkg
+    spec_pkg.loader.exec_module(pkg)
+
+    # defusedxml.ElementTree サブモジュールを登録
+    spec_et = importlib.util.spec_from_file_location('defusedxml.ElementTree', _etree)
+    mod_et = importlib.util.module_from_spec(spec_et)
+    sys.modules['defusedxml.ElementTree'] = mod_et
+    spec_et.loader.exec_module(mod_et)
+
+    return mod_et.fromstring
+
+_safe_fromstring = _load_vendored_defusedxml()
 
 
 NS_MOJ = 'http://www.moj.go.jp/MINJI/tizuxml'
@@ -78,7 +108,7 @@ class MOJXMLParser:
                 for xml_name in xml_names:
                     raw = zf.read(xml_name)
                     try:
-                        root = ET.fromstring(raw)
+                        root = _safe_fromstring(raw)
                     except ET.ParseError as e:
                         raise ValueError(f"XML解析エラー: {e}")
 
@@ -99,7 +129,7 @@ class MOJXMLParser:
             with open(file_path, 'rb') as f:
                 raw = f.read()
             try:
-                root = ET.fromstring(raw)
+                root = _safe_fromstring(raw)
             except ET.ParseError as e:
                 raise ValueError(f"XML解析エラー: {e}")
 
@@ -417,7 +447,7 @@ class MOJXMLParser:
         if self.xml_bytes is None:
             raise ValueError("XMLデータが読み込まれていません")
 
-        root = ET.fromstring(self.xml_bytes)
+        root = _safe_fromstring(self.xml_bytes)
 
         # 座標系タグを更新
         coord_sys_elem = root.find(_t(NS_MOJ, '座標系'))
